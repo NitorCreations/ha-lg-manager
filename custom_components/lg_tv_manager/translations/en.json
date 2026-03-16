@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LG TV Manager",
+        "description": "Configure inventory and discovery sources for LG TV reconciliation.",
+        "data": {
+          "inventory_path": "Inventory file path",
+          "firewall_clients_path": "Optional firewall CSV path",
+          "scan_interval": "Scan interval in seconds"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single LG TV Manager instance is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LG TV Manager Options",
+        "data": {
+          "inventory_path": "Inventory file path",
+          "firewall_clients_path": "Optional firewall CSV path",
+          "scan_interval": "Scan interval in seconds"
+        }
+      }
+    }
+  }
+}

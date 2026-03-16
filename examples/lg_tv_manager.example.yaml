@@ -1,0 +1,25 @@
+version: 1
+defaults:
+  expected_source: HDMI1
+
+tvs:
+  lovelace:
+    title: Lovelace LG
+    room: Lovelace
+    entity_id: media_player.lovelace_lg
+    friendly_name_hints:
+      - lovelace
+
+  church:
+    title: Church LG
+    room: Church
+    entity_id: media_player.church_lg
+    friendly_name_hints:
+      - church
+
+  lounge:
+    title: Lounge LG
+    room: Lounge
+    entity_id: media_player.lounge_lg
+    friendly_name_hints:
+      - lounge

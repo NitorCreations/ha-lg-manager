@@ -1,0 +1,12 @@
+{
+  "domain": "lg_tv_manager",
+  "name": "HA LG Manager",
+  "version": "0.1.0",
+  "documentation": "https://github.com/NitorCreations/ha-lg-manager",
+  "issue_tracker": "https://github.com/NitorCreations/ha-lg-manager/issues",
+  "codeowners": ["@NitorCreations"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "hub",
+  "requirements": []
+}
