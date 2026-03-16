@@ -1,7 +1,7 @@
 {
   "domain": "lg_tv_manager",
   "name": "HA LG Manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "documentation": "https://github.com/NitorCreations/ha-lg-manager",
   "issue_tracker": "https://github.com/NitorCreations/ha-lg-manager/issues",
   "codeowners": ["@NitorCreations"],

@@ -31,6 +31,8 @@ from .model import (
     reconcile_tvs,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass
 class LgManagerData:
@@ -67,7 +69,7 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
         scan_interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
         super().__init__(
             hass,
-            logger=logging.getLogger(__name__),
+            logger=LOGGER,
             name=DOMAIN,
             update_interval=timedelta(seconds=scan_interval),
         )
@@ -86,12 +88,43 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 else None
             )
             _, inventory_by_title = await self.hass.async_add_executor_job(load_inventory, inventory_path)
+            LOGGER.debug(
+                "Loading LG TV inventory from %s, firewall CSV %s",
+                inventory_path,
+                firewall_clients_path if firewall_clients_path else "<disabled>",
+            )
             configured_tvs = await self._async_collect_configured_tvs(inventory_by_title)
             discovered_tvs = await self.hass.async_add_executor_job(
                 self._discover_devices,
                 firewall_clients_path,
             )
             results = await self.hass.async_add_executor_job(reconcile_tvs, configured_tvs, discovered_tvs)
+            LOGGER.debug(
+                "LG TV Manager update complete: inventory=%s configured=%s discovered=%s summary=%s",
+                len(inventory_by_title),
+                len(configured_tvs),
+                len(discovered_tvs),
+                {
+                    "unchanged": sum(1 for item in results if item.classification == "unchanged"),
+                    "ip_changed": sum(1 for item in results if item.classification == "ip_changed"),
+                    "replacement_candidate": sum(
+                        1 for item in results if item.classification == "replacement_candidate"
+                    ),
+                    "missing": sum(1 for item in results if item.classification == "missing"),
+                },
+            )
+            for result in results:
+                LOGGER.debug(
+                    "Result %s: entity=%s class=%s confidence=%s configured_host=%s discovered_ip=%s discovered_uuid=%s notes=%s",
+                    result.title,
+                    result.entity_id,
+                    result.classification,
+                    result.confidence,
+                    result.configured_host,
+                    result.discovered_ip,
+                    result.discovered_uuid,
+                    result.notes,
+                )
             return LgManagerData(
                 results=results,
                 discovered_count=len(discovered_tvs),
@@ -99,6 +132,7 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 inventory_count=len(inventory_by_title),
             )
         except Exception as err:  # pragma: no cover - HA handles UpdateFailed
+            LOGGER.exception("LG TV Manager update failed")
             raise UpdateFailed(str(err)) from err
 
     async def _async_collect_configured_tvs(self, inventory_by_title: dict[str, Any]) -> list[ConfiguredTv]:
@@ -123,9 +157,40 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                     inventory=inventory,
                 )
             )
+        LOGGER.debug(
+            "Collected %s configured webostv entries: %s",
+            len(configured),
+            [
+                {
+                    "title": item.title,
+                    "entity_id": item.entity_id,
+                    "host": item.host,
+                    "unique_id": item.unique_id,
+                    "ssdp_uuid": item.ssdp_uuid,
+                    "has_inventory": item.inventory is not None,
+                }
+                for item in configured
+            ],
+        )
         return configured
 
     def _discover_devices(self, firewall_clients_path: Path | None) -> list[Any]:
         discovered = discover_ssdp_devices()
         discovered.extend(load_firewall_clients(firewall_clients_path))
-        return dedupe_discovered(discovered)
+        deduped = dedupe_discovered(discovered)
+        LOGGER.debug(
+            "Discovered %s raw LG candidates and %s deduped candidates: %s",
+            len(discovered),
+            len(deduped),
+            [
+                {
+                    "ip": item.ip,
+                    "mac": item.mac,
+                    "uuid": item.uuid,
+                    "friendly_name": item.friendly_name,
+                    "source": item.source,
+                }
+                for item in deduped
+            ],
+        )
+        return deduped
