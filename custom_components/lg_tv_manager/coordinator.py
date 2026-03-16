@@ -40,6 +40,22 @@ class LgManagerData:
     inventory_count: int
 
 
+def _extract_ssdp_uuid(entry: ConfigEntry) -> str | None:
+    """Extract an SSDP UUID from a Home Assistant config entry."""
+    discovery_keys = getattr(entry, "discovery_keys", None) or {}
+    ssdp_items = discovery_keys.get("ssdp") or []
+    if not ssdp_items:
+        return None
+
+    first_item = ssdp_items[0]
+    key_value = getattr(first_item, "key", None)
+    if key_value is None and isinstance(first_item, dict):
+        key_value = first_item.get("key")
+    if key_value is None:
+        key_value = str(first_item)
+    return normalize_uuid(key_value)
+
+
 class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
     """Manage LG discovery and reconciliation updates."""
 
@@ -94,8 +110,7 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
         }
         configured: list[ConfiguredTv] = []
         for entry in self.hass.config_entries.async_entries("webostv"):
-            ssdp_items = (getattr(entry, "discovery_keys", {}) or {}).get("ssdp") or []
-            ssdp_uuid = normalize_uuid(ssdp_items[0]["key"]) if ssdp_items else None
+            ssdp_uuid = _extract_ssdp_uuid(entry)
             inventory = inventory_by_title.get(entry.title)
             configured.append(
                 ConfiguredTv(
