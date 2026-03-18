@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from homeassistant.components.network import async_get_adapters
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -16,6 +17,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_FIREWALL_CLIENTS_PATH,
     CONF_INVENTORY_PATH,
+    CONF_MERAKI_API_KEY,
+    CONF_MERAKI_API_URL,
     CONF_SCAN_INTERVAL,
     DEFAULT_INVENTORY_PATH,
     DEFAULT_SCAN_INTERVAL,
@@ -27,6 +30,7 @@ from .model import (
     discover_ssdp_devices,
     load_firewall_clients,
     load_inventory,
+    load_meraki_clients,
     normalize_uuid,
     reconcile_tvs,
 )
@@ -87,16 +91,24 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 if firewall_clients_path_value
                 else None
             )
+            meraki_api_url = (self.config_entry.options.get(CONF_MERAKI_API_URL) or "").strip()
+            meraki_api_key = (self.config_entry.options.get(CONF_MERAKI_API_KEY) or "").strip()
             _, inventory_by_title = await self.hass.async_add_executor_job(load_inventory, inventory_path)
+            source_ips = await self._async_get_source_ips()
             LOGGER.debug(
-                "Loading LG TV inventory from %s, firewall CSV %s",
+                "Loading LG TV inventory from %s, firewall CSV %s, Meraki %s, source IPs %s",
                 inventory_path,
                 firewall_clients_path if firewall_clients_path else "<disabled>",
+                meraki_api_url if meraki_api_url and meraki_api_key else "<disabled>",
+                source_ips,
             )
             configured_tvs = await self._async_collect_configured_tvs(inventory_by_title)
             discovered_tvs = await self.hass.async_add_executor_job(
                 self._discover_devices,
                 firewall_clients_path,
+                meraki_api_url,
+                meraki_api_key,
+                source_ips,
             )
             results = await self.hass.async_add_executor_job(reconcile_tvs, configured_tvs, discovered_tvs)
             LOGGER.debug(
@@ -174,9 +186,30 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
         )
         return configured
 
-    def _discover_devices(self, firewall_clients_path: Path | None) -> list[Any]:
-        discovered = discover_ssdp_devices()
+    async def _async_get_source_ips(self) -> list[str]:
+        """Collect usable IPv4 source addresses from Home Assistant adapters."""
+        adapters = await async_get_adapters(self.hass)
+        source_ips: list[str] = []
+        for adapter in adapters:
+            if not adapter.get("enabled", True):
+                continue
+            for ipv4 in adapter.get("ipv4", []):
+                address = ipv4.get("address")
+                if not address or address.startswith("127."):
+                    continue
+                source_ips.append(address)
+        return sorted(set(source_ips))
+
+    def _discover_devices(
+        self,
+        firewall_clients_path: Path | None,
+        meraki_api_url: str,
+        meraki_api_key: str,
+        source_ips: list[str],
+    ) -> list[Any]:
+        discovered = discover_ssdp_devices(source_ips=source_ips)
         discovered.extend(load_firewall_clients(firewall_clients_path))
+        discovered.extend(load_meraki_clients(meraki_api_url, meraki_api_key))
         deduped = dedupe_discovered(discovered)
         LOGGER.debug(
             "Discovered %s raw LG candidates and %s deduped candidates: %s",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 import socket
 import subprocess
@@ -55,6 +56,7 @@ class DiscoveredTv:
     model_name: str | None
     source: str
     note: str | None = None
+    ssdp_st: str | None = None
 
 
 @dataclass
@@ -147,6 +149,65 @@ def load_firewall_clients(path: Path | None) -> list[DiscoveredTv]:
     return devices
 
 
+def iter_meraki_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("items", "clients", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def load_meraki_clients(api_url: str | None, api_key: str | None) -> list[DiscoveredTv]:
+    if not api_url or not api_key:
+        return []
+    request = urllib.request.Request(
+        api_url,
+        headers={
+            "X-Cisco-Meraki-API-Key": api_key,
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
+        return []
+
+    devices: list[DiscoveredTv] = []
+    for row in iter_meraki_items(payload):
+        manufacturer = str(row.get("manufacturer") or "").strip()
+        description = str(
+            row.get("description")
+            or row.get("name")
+            or row.get("dhcpHostname")
+            or row.get("recentDeviceName")
+            or ""
+        ).strip()
+        notes = str(row.get("notes") or row.get("deviceName") or "").strip()
+        searchable = " ".join([manufacturer, description, notes]).lower()
+        if "lg" not in searchable and "webos" not in searchable:
+            continue
+        ip_address = str(row.get("ip") or row.get("ip6") or "").strip()
+        if not ip_address or ":" in ip_address:
+            continue
+        devices.append(
+            DiscoveredTv(
+                ip=ip_address,
+                mac=normalize_mac(str(row.get("mac") or row.get("clientMac") or "")),
+                uuid=None,
+                friendly_name=notes or description or None,
+                manufacturer=manufacturer or None,
+                model_name=None,
+                source="meraki_api",
+                note=str(row.get("vlan") or row.get("status") or "").strip() or None,
+            )
+        )
+    return devices
+
+
 def parse_ssdp_headers(payload: bytes) -> dict[str, str]:
     headers: dict[str, str] = {}
     for line in payload.decode("utf-8", errors="ignore").split("\r\n"):
@@ -167,6 +228,16 @@ def send_ssdp_probe(sock: socket.socket, search_target: str) -> None:
         "\r\n"
     )
     sock.sendto(message.encode("ascii"), (SSDP_MULTICAST_IP, SSDP_PORT))
+
+
+def create_ssdp_socket(source_ip: str, timeout_seconds: float) -> socket.socket:
+    """Create a UDP socket that sends SSDP from a specific source address."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.settimeout(timeout_seconds)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(source_ip))
+    sock.bind((source_ip, 0))
+    return sock
 
 
 def fetch_device_description(location: str | None) -> dict[str, str | None]:
@@ -213,56 +284,90 @@ def resolve_mac(ip_address: str) -> str | None:
     return None
 
 
-def discover_ssdp_devices(timeout_seconds: float = 2.0, attempts: int = 2) -> list[DiscoveredTv]:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.settimeout(timeout_seconds)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+def discover_ssdp_devices(
+    source_ips: list[str] | None = None,
+    timeout_seconds: float = 2.0,
+    attempts: int = 2,
+) -> list[DiscoveredTv]:
+    source_ips = source_ips or ["0.0.0.0"]
     responses: dict[tuple[str, str | None], DiscoveredTv] = {}
-    try:
-        for _ in range(attempts):
-            for search_target in SSDP_SEARCH_TARGETS:
-                send_ssdp_probe(sock, search_target)
-            while True:
-                try:
-                    payload, address = sock.recvfrom(8192)
-                except TimeoutError:
-                    break
-                headers = parse_ssdp_headers(payload)
-                location = headers.get("location")
-                parsed_location = urllib.parse.urlparse(location) if location else None
-                ip_address = parsed_location.hostname if parsed_location and parsed_location.hostname else address[0]
-                device_xml = fetch_device_description(location)
-                manufacturer = device_xml.get("manufacturer")
-                friendly_name = device_xml.get("friendly_name")
-                model_name = device_xml.get("model_name")
-                searchable = " ".join(
-                    value for value in (manufacturer, friendly_name, model_name, headers.get("server")) if value
-                ).lower()
-                if not any(token in searchable for token in ("lg", "webos", "lge")):
-                    continue
-                tv = DiscoveredTv(
-                    ip=ip_address,
-                    mac=resolve_mac(ip_address),
-                    uuid=normalize_uuid(device_xml.get("udn") or headers.get("usn")),
-                    friendly_name=friendly_name,
-                    manufacturer=manufacturer,
-                    model_name=model_name,
-                    source="ssdp",
-                    note=location,
-                )
-                responses[(tv.ip, tv.uuid)] = tv
-    finally:
-        sock.close()
+    for source_ip in source_ips:
+        try:
+            sock = create_ssdp_socket(source_ip, timeout_seconds)
+        except OSError:
+            continue
+        try:
+            for _ in range(attempts):
+                for search_target in SSDP_SEARCH_TARGETS:
+                    send_ssdp_probe(sock, search_target)
+                while True:
+                    try:
+                        payload, address = sock.recvfrom(8192)
+                    except TimeoutError:
+                        break
+                    headers = parse_ssdp_headers(payload)
+                    location = headers.get("location")
+                    parsed_location = urllib.parse.urlparse(location) if location else None
+                    ip_address = parsed_location.hostname if parsed_location and parsed_location.hostname else address[0]
+                    device_xml = fetch_device_description(location)
+                    manufacturer = device_xml.get("manufacturer")
+                    friendly_name = device_xml.get("friendly_name")
+                    model_name = device_xml.get("model_name")
+                    searchable = " ".join(
+                        value for value in (manufacturer, friendly_name, model_name, headers.get("server")) if value
+                    ).lower()
+                    if not any(token in searchable for token in ("lg", "webos", "lge")):
+                        continue
+                    tv = DiscoveredTv(
+                        ip=ip_address,
+                        mac=resolve_mac(ip_address),
+                        uuid=normalize_uuid(device_xml.get("udn") or headers.get("usn")),
+                        friendly_name=friendly_name,
+                        manufacturer=manufacturer,
+                        model_name=model_name,
+                        source="ssdp",
+                        note=location,
+                        ssdp_st=headers.get("st"),
+                    )
+                    responses[(tv.ip, tv.uuid)] = tv
+        finally:
+            sock.close()
     return list(responses.values())
 
 
 def dedupe_discovered(devices: list[DiscoveredTv]) -> list[DiscoveredTv]:
-    deduped: dict[tuple[str | None, str], DiscoveredTv] = {}
+    deduped: dict[str, DiscoveredTv] = {}
     for device in devices:
-        key = (device.uuid, device.ip)
-        existing = deduped.get(key)
-        if existing is None or existing.source != "ssdp":
-            deduped[key] = device
+        existing = deduped.get(device.ip)
+        if existing is None:
+            deduped[device.ip] = device
+            continue
+
+        existing_is_webos = bool(existing.ssdp_st and "webos-second-screen" in existing.ssdp_st)
+        device_is_webos = bool(device.ssdp_st and "webos-second-screen" in device.ssdp_st)
+
+        if device.source == "ssdp" and existing.source != "ssdp":
+            deduped[device.ip] = device
+            continue
+        if device_is_webos and not existing_is_webos:
+            deduped[device.ip] = device
+            continue
+
+        # Merge missing details from additional records seen on the same IP.
+        if not existing.uuid and device.uuid:
+            existing.uuid = device.uuid
+        if not existing.mac and device.mac:
+            existing.mac = device.mac
+        if not existing.friendly_name and device.friendly_name:
+            existing.friendly_name = device.friendly_name
+        if not existing.manufacturer and device.manufacturer:
+            existing.manufacturer = device.manufacturer
+        if not existing.model_name and device.model_name:
+            existing.model_name = device.model_name
+        if not existing.note and device.note:
+            existing.note = device.note
+        if not existing.ssdp_st and device.ssdp_st:
+            existing.ssdp_st = device.ssdp_st
     return list(deduped.values())
 
 

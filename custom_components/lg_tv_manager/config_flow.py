@@ -7,12 +7,16 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
 from .const import (
     CONF_FIREWALL_CLIENTS_PATH,
     CONF_INVENTORY_PATH,
+    CONF_MERAKI_API_KEY,
+    CONF_MERAKI_API_URL,
     CONF_SCAN_INTERVAL,
     DEFAULT_INVENTORY_PATH,
+    DEFAULT_MERAKI_API_URL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -30,6 +34,14 @@ def _options_schema(user_input: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_FIREWALL_CLIENTS_PATH,
                 default=user_input.get(CONF_FIREWALL_CLIENTS_PATH, ""),
             ): str,
+            vol.Optional(
+                CONF_MERAKI_API_URL,
+                default=user_input.get(CONF_MERAKI_API_URL, DEFAULT_MERAKI_API_URL),
+            ): str,
+            vol.Optional(
+                CONF_MERAKI_API_KEY,
+                default=user_input.get(CONF_MERAKI_API_KEY, ""),
+            ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
             vol.Required(
                 CONF_SCAN_INTERVAL,
                 default=user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),

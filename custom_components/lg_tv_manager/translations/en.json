@@ -7,6 +7,8 @@
         "data": {
           "inventory_path": "Inventory file path",
           "firewall_clients_path": "Optional firewall CSV path",
+          "meraki_api_url": "Optional Meraki clients API URL",
+          "meraki_api_key": "Optional Meraki API key",
           "scan_interval": "Scan interval in seconds"
         }
       }
@@ -22,6 +24,8 @@
         "data": {
           "inventory_path": "Inventory file path",
           "firewall_clients_path": "Optional firewall CSV path",
+          "meraki_api_url": "Optional Meraki clients API URL",
+          "meraki_api_key": "Optional Meraki API key",
           "scan_interval": "Scan interval in seconds"
         }
       }

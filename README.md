@@ -6,6 +6,7 @@ Home Assistant custom integration for managing LG webOS TVs during network migra
 
 - Discovers LG TVs over SSDP on the local network.
 - Optionally reads a firewall/export CSV as extra discovery input.
+- Optionally reads live Meraki client data from the Dashboard API.
 - Reconciles discovered TVs against Home Assistant `webostv` config entries.
 - Exposes Home Assistant entities for summary, per-TV reconciliation state, and manual refresh.
 - Keeps live office state out of the repository by using a local inventory file in `/config`.
@@ -40,6 +41,7 @@ The integration expects local, non-public operator data in `/config`.
 
 - Inventory file: default `/config/lg_tv_manager.yaml`
 - Optional firewall CSV: configured in the integration options
+- Optional Meraki API URL and API key: configured in the integration UI and stored privately in Home Assistant config storage
 
 See [`examples/lg_tv_manager.example.yaml`](examples/lg_tv_manager.example.yaml) for the public-safe inventory format.
 
@@ -53,3 +55,12 @@ Each TV entry can define:
 - expected source
 
 No IPs, MACs, or office-specific live data need to be committed.
+
+## Meraki support
+
+If you use Cisco Meraki for client visibility, you can provide:
+
+- a full clients API URL, for example `https://api.meraki.com/api/v1/networks/<network_id>/clients?timespan=86400&perPage=1000`
+- an API key in the integration options
+
+The API key is intended to be stored in Home Assistant's config entry storage, not in this repository.
