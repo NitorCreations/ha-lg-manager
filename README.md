@@ -9,7 +9,7 @@ Home Assistant custom integration for managing LG webOS TVs during network migra
 - Optionally reads live Meraki client data from the Dashboard API.
 - Reconciles discovered TVs against Home Assistant `webostv` config entries.
 - Exposes Home Assistant entities for summary, per-TV reconciliation state, and manual refresh.
-- Keeps live office state out of the repository by using a local inventory file in `/config`.
+- Keeps live office state out of the repository by using optional local hints in `/config`.
 
 ## Current scope
 
@@ -17,10 +17,11 @@ This first version focuses on discovery and reconciliation:
 
 - one integration config entry
 - one refresh button
+- one discovery sweep button
 - one summary sensor
 - one sensor per configured LG TV
 
-The integration does not modify Home Assistant `.storage` or automations.
+The integration does not modify Home Assistant `.storage`. It can inspect current wake-related automations and scripts and can trigger those existing entities during a discovery sweep.
 
 ## Installation
 
@@ -37,9 +38,9 @@ Copy `custom_components/lg_tv_manager` into `/config/custom_components/lg_tv_man
 
 ## Local files
 
-The integration expects local, non-public operator data in `/config`.
+The integration can use local, non-public operator data in `/config`, but it no longer requires inventory to function.
 
-- Inventory file: default `/config/lg_tv_manager.yaml`
+- Optional inventory file: default `/config/lg_tv_manager.yaml`
 - Optional firewall CSV: configured in the integration options
 - Optional Meraki API URL and API key: configured in the integration UI and stored privately in Home Assistant config storage
 
@@ -47,14 +48,15 @@ See [`examples/lg_tv_manager.example.yaml`](examples/lg_tv_manager.example.yaml)
 
 ## Inventory model
 
-Each TV entry can define:
+Each TV entry can define optional hints:
 
 - canonical room title
 - expected Home Assistant entity ID
 - name hints for matching
 - expected source
+- optional wake automation aliases
 
-No IPs, MACs, or office-specific live data need to be committed.
+No IPs, MACs, or office-specific live data need to be committed. Meraki can act as the main candidate source while inventory remains an optional enhancement layer.
 
 ## Meraki support
 
@@ -64,3 +66,26 @@ If you use Cisco Meraki for client visibility, you can provide:
 - an API key in the integration options
 
 The API key is intended to be stored in Home Assistant's config entry storage, not in this repository.
+
+## Discovery sweep
+
+The integration provides an `LG TV Manager Discovery Sweep` button entity.
+
+When pressed, it:
+
+1. builds wake targets from all current Meraki-discovered LG-like candidates
+2. sends Home Assistant WOL packets for those candidates when MAC and broadcast information are available
+3. triggers any known wake automation/script aliases from the optional inventory
+4. waits briefly
+5. refreshes live discovery and reconciliation
+
+This is intended for cases where most TVs are normally off and Meraki acts as the candidate source while SSDP/webOS provides the live identity after wake.
+
+## Live configuration inspection
+
+The integration already inspects current live Home Assistant `webostv` config entries. It also reads:
+
+- `/config/automations.yaml`
+- `/config/scripts.yaml`
+
+to surface current wake-related configuration on the summary and per-TV diagnostic entities.

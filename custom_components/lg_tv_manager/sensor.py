@@ -63,6 +63,11 @@ class LgTvManagerSummarySensor(CoordinatorEntity[LgManagerData], SensorEntity):
             "configured_count": data.configured_count,
             "discovered_count": data.discovered_count,
             "inventory_count": data.inventory_count,
+            "meraki_candidate_count": data.meraki_candidate_count,
+            "meraki_candidates": data.meraki_candidates,
+            "configured_titles": data.configured_titles,
+            "wol_action_count": len(data.wol_action_records),
+            "wol_aliases_with_config": sorted(data.wol_action_records),
             "unchanged": sum(1 for item in data.results if item.classification == "unchanged"),
             "ip_changed": sum(1 for item in data.results if item.classification == "ip_changed"),
             "replacement_candidate": sum(
@@ -96,6 +101,20 @@ class LgTvReconcileSensor(CoordinatorEntity[LgManagerData], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         result = self._result
+        expected_aliases = self.coordinator.data.expected_wol_aliases.get(result.title, [])
+        wol_records = []
+        for alias in expected_aliases:
+            record = self.coordinator.data.wol_action_records.get(alias)
+            if record:
+                wol_records.append(
+                    {
+                        "alias": record.alias,
+                        "source_type": record.source_type,
+                        "mac": record.mac,
+                        "broadcast_address": record.broadcast_address,
+                        "broadcast_port": record.broadcast_port,
+                    }
+                )
         return {
             "room": result.room,
             "entity_id": result.entity_id,
@@ -105,5 +124,7 @@ class LgTvReconcileSensor(CoordinatorEntity[LgManagerData], SensorEntity):
             "discovered_ip": result.discovered_ip,
             "discovered_mac": result.discovered_mac,
             "discovered_uuid": result.discovered_uuid,
+            "expected_wol_aliases": expected_aliases,
+            "current_wol_configurations": wol_records,
             "notes": result.notes,
         }

@@ -9,6 +9,8 @@ tvs:
     entity_id: media_player.lovelace_lg
     friendly_name_hints:
       - lovelace
+    wol_automation_aliases:
+      - Lovelace LG Wake On LAN
 
   church:
     title: Church LG

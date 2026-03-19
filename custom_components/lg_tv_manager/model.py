@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import ipaddress
 import re
 import socket
 import subprocess
@@ -33,6 +34,7 @@ class InventoryTv:
     entity_id: str | None
     expected_source: str | None
     friendly_name_hints: list[str] = field(default_factory=list)
+    wol_automation_aliases: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -74,6 +76,24 @@ class ReconcileResult:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class WolActionRecord:
+    alias: str
+    source_type: str
+    mac: str | None
+    broadcast_address: str | None
+    broadcast_port: int | None
+
+
+@dataclass
+class WakeTarget:
+    ip: str
+    mac: str | None
+    broadcast_address: str | None
+    source: str
+    label: str
+
+
 def normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
@@ -98,6 +118,22 @@ def normalize_mac(value: str | None) -> str | None:
     return ":".join(raw[i : i + 2] for i in range(0, 12, 2)).upper()
 
 
+def network_broadcast_for_ip(ip_address: str, adapter_networks: list[str]) -> str | None:
+    """Find a broadcast address for an IP based on known local adapter networks."""
+    try:
+        ip_obj = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return None
+    for network_text in adapter_networks:
+        try:
+            network = ipaddress.ip_network(network_text, strict=False)
+        except ValueError:
+            continue
+        if ip_obj in network and isinstance(network, ipaddress.IPv4Network):
+            return str(network.broadcast_address)
+    return None
+
+
 def load_inventory(path: Path) -> tuple[dict[str, InventoryTv], dict[str, InventoryTv]]:
     if not path.exists():
         return {}, {}
@@ -113,10 +149,17 @@ def load_inventory(path: Path) -> tuple[dict[str, InventoryTv], dict[str, Invent
             entity_id=raw.get("entity_id"),
             expected_source=raw.get("expected_source", defaults.get("expected_source")),
             friendly_name_hints=list(raw.get("friendly_name_hints", [])),
+            wol_automation_aliases=list(raw.get("wol_automation_aliases", [])),
         )
         inventory_by_slug[slug] = tv
         inventory_by_title[tv.title] = tv
     return inventory_by_slug, inventory_by_title
+
+
+def load_yaml_file(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def load_firewall_clients(path: Path | None) -> list[DiscoveredTv]:
@@ -228,6 +271,70 @@ def send_ssdp_probe(sock: socket.socket, search_target: str) -> None:
         "\r\n"
     )
     sock.sendto(message.encode("ascii"), (SSDP_MULTICAST_IP, SSDP_PORT))
+
+
+def _iter_wol_actions(actions: Any) -> list[dict[str, Any]]:
+    if not isinstance(actions, list):
+        return []
+    matches: list[dict[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        service = action.get("action") or action.get("service")
+        if service == "wake_on_lan.send_magic_packet":
+            matches.append(action)
+            continue
+        for nested_key in ("sequence", "then", "else", "default", "parallel"):
+            nested_value = action.get(nested_key)
+            if isinstance(nested_value, list):
+                matches.extend(_iter_wol_actions(nested_value))
+        if isinstance(action.get("choose"), list):
+            for choose_item in action["choose"]:
+                if isinstance(choose_item, dict):
+                    matches.extend(_iter_wol_actions(choose_item.get("sequence")))
+    return matches
+
+
+def load_wol_action_records(automations_path: Path, scripts_path: Path) -> dict[str, WolActionRecord]:
+    records: dict[str, WolActionRecord] = {}
+
+    automations_payload = load_yaml_file(automations_path)
+    if isinstance(automations_payload, list):
+        for item in automations_payload:
+            if not isinstance(item, dict):
+                continue
+            alias = item.get("alias")
+            if not alias:
+                continue
+            for action in _iter_wol_actions(item.get("actions", item.get("action"))):
+                data = action.get("data") or {}
+                records[alias] = WolActionRecord(
+                    alias=alias,
+                    source_type="automation",
+                    mac=normalize_mac(data.get("mac")),
+                    broadcast_address=data.get("broadcast_address"),
+                    broadcast_port=int(data["broadcast_port"]) if str(data.get("broadcast_port", "")).isdigit() else None,
+                )
+                break
+
+    scripts_payload = load_yaml_file(scripts_path)
+    if isinstance(scripts_payload, dict):
+        for script_key, item in scripts_payload.items():
+            if not isinstance(item, dict):
+                continue
+            alias = item.get("alias") or script_key
+            for action in _iter_wol_actions(item.get("sequence")):
+                data = action.get("data") or {}
+                records[alias] = WolActionRecord(
+                    alias=alias,
+                    source_type="script",
+                    mac=normalize_mac(data.get("mac")),
+                    broadcast_address=data.get("broadcast_address"),
+                    broadcast_port=int(data["broadcast_port"]) if str(data.get("broadcast_port", "")).isdigit() else None,
+                )
+                break
+
+    return records
 
 
 def create_ssdp_socket(source_ip: str, timeout_seconds: float) -> socket.socket:

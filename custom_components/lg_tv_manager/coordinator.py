@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
@@ -26,11 +27,15 @@ from .const import (
 )
 from .model import (
     ConfiguredTv,
+    WolActionRecord,
+    WakeTarget,
     dedupe_discovered,
     discover_ssdp_devices,
     load_firewall_clients,
     load_inventory,
     load_meraki_clients,
+    load_wol_action_records,
+    network_broadcast_for_ip,
     normalize_uuid,
     reconcile_tvs,
 )
@@ -44,6 +49,11 @@ class LgManagerData:
     discovered_count: int
     configured_count: int
     inventory_count: int
+    configured_titles: list[str]
+    expected_wol_aliases: dict[str, list[str]]
+    wol_action_records: dict[str, WolActionRecord]
+    meraki_candidate_count: int
+    meraki_candidates: list[dict[str, Any]]
 
 
 def _extract_ssdp_uuid(entry: ConfigEntry) -> str | None:
@@ -91,16 +101,19 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 if firewall_clients_path_value
                 else None
             )
+            automations_path = Path(self.hass.config.path("automations.yaml"))
+            scripts_path = Path(self.hass.config.path("scripts.yaml"))
             meraki_api_url = (self.config_entry.options.get(CONF_MERAKI_API_URL) or "").strip()
             meraki_api_key = (self.config_entry.options.get(CONF_MERAKI_API_KEY) or "").strip()
             _, inventory_by_title = await self.hass.async_add_executor_job(load_inventory, inventory_path)
-            source_ips = await self._async_get_source_ips()
+            source_ips, adapter_networks = await self._async_get_network_context()
             LOGGER.debug(
-                "Loading LG TV inventory from %s, firewall CSV %s, Meraki %s, source IPs %s",
+                "Loading LG TV inventory from %s, firewall CSV %s, Meraki %s, source IPs %s adapter_networks %s",
                 inventory_path,
                 firewall_clients_path if firewall_clients_path else "<disabled>",
                 meraki_api_url if meraki_api_url and meraki_api_key else "<disabled>",
                 source_ips,
+                adapter_networks,
             )
             configured_tvs = await self._async_collect_configured_tvs(inventory_by_title)
             discovered_tvs = await self.hass.async_add_executor_job(
@@ -111,11 +124,35 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 source_ips,
             )
             results = await self.hass.async_add_executor_job(reconcile_tvs, configured_tvs, discovered_tvs)
+            wol_action_records = await self.hass.async_add_executor_job(
+                load_wol_action_records,
+                automations_path,
+                scripts_path,
+            )
+            expected_wol_aliases = {
+                tv.title: list(tv.wol_automation_aliases)
+                for tv in inventory_by_title.values()
+                if tv.wol_automation_aliases
+            }
+            meraki_candidates = [
+                {
+                    "ip": item.ip,
+                    "mac": item.mac,
+                    "friendly_name": item.friendly_name,
+                    "manufacturer": item.manufacturer,
+                    "note": item.note,
+                    "broadcast_address": network_broadcast_for_ip(item.ip, adapter_networks),
+                }
+                for item in discovered_tvs
+                if item.source == "meraki_api"
+            ]
             LOGGER.debug(
-                "LG TV Manager update complete: inventory=%s configured=%s discovered=%s summary=%s",
+                "LG TV Manager update complete: inventory=%s configured=%s discovered=%s meraki_candidates=%s wol_actions=%s summary=%s",
                 len(inventory_by_title),
                 len(configured_tvs),
                 len(discovered_tvs),
+                len(meraki_candidates),
+                len(wol_action_records),
                 {
                     "unchanged": sum(1 for item in results if item.classification == "unchanged"),
                     "ip_changed": sum(1 for item in results if item.classification == "ip_changed"),
@@ -142,10 +179,81 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 discovered_count=len(discovered_tvs),
                 configured_count=len(configured_tvs),
                 inventory_count=len(inventory_by_title),
+                configured_titles=[item.title for item in configured_tvs],
+                expected_wol_aliases=expected_wol_aliases,
+                wol_action_records=wol_action_records,
+                meraki_candidate_count=len(meraki_candidates),
+                meraki_candidates=meraki_candidates,
             )
         except Exception as err:  # pragma: no cover - HA handles UpdateFailed
             LOGGER.exception("LG TV Manager update failed")
             raise UpdateFailed(str(err)) from err
+
+    async def async_run_discovery_sweep(self, delay_seconds: int = 30) -> dict[str, object]:
+        """Trigger WOL for Meraki candidates first, then known wake entities, wait, and refresh."""
+        triggered: list[str] = []
+        unresolved: list[str] = []
+
+        for candidate in self._build_meraki_wake_targets():
+            if not candidate.mac or not candidate.broadcast_address:
+                unresolved.append(candidate.label)
+                continue
+            await self.hass.services.async_call(
+                "wake_on_lan",
+                "send_magic_packet",
+                {
+                    "mac": candidate.mac,
+                    "broadcast_address": candidate.broadcast_address,
+                },
+                blocking=True,
+            )
+            triggered.append(f"wake_on_lan:{candidate.label}")
+
+        expected_aliases = sorted(
+            {
+                alias
+                for aliases in self.data.expected_wol_aliases.values()
+                for alias in aliases
+            }
+        )
+        for alias in expected_aliases:
+            entity_id = self._resolve_alias_entity_id(alias)
+            if not entity_id:
+                unresolved.append(alias)
+                continue
+            domain = entity_id.split(".", 1)[0]
+            if domain == "automation":
+                await self.hass.services.async_call(
+                    "automation",
+                    "trigger",
+                    {"entity_id": entity_id, "skip_condition": True},
+                    blocking=True,
+                )
+                triggered.append(entity_id)
+            elif domain == "script":
+                await self.hass.services.async_call(
+                    "script",
+                    "turn_on",
+                    {"entity_id": entity_id},
+                    blocking=True,
+                )
+                triggered.append(entity_id)
+            else:
+                unresolved.append(alias)
+
+        LOGGER.debug(
+            "LG TV Manager discovery sweep triggered=%s unresolved=%s waiting=%ss",
+            triggered,
+            unresolved,
+            delay_seconds,
+        )
+        await asyncio.sleep(delay_seconds)
+        await self.async_request_refresh()
+        return {
+            "triggered_entities": triggered,
+            "unresolved_aliases": unresolved,
+            "delay_seconds": delay_seconds,
+        }
 
     async def _async_collect_configured_tvs(self, inventory_by_title: dict[str, Any]) -> list[ConfiguredTv]:
         entity_registry = er.async_get(self.hass)
@@ -186,10 +294,11 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
         )
         return configured
 
-    async def _async_get_source_ips(self) -> list[str]:
-        """Collect usable IPv4 source addresses from Home Assistant adapters."""
+    async def _async_get_network_context(self) -> tuple[list[str], list[str]]:
+        """Collect usable IPv4 source addresses and networks from Home Assistant adapters."""
         adapters = await async_get_adapters(self.hass)
         source_ips: list[str] = []
+        adapter_networks: list[str] = []
         for adapter in adapters:
             if not adapter.get("enabled", True):
                 continue
@@ -198,7 +307,34 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                 if not address or address.startswith("127."):
                     continue
                 source_ips.append(address)
-        return sorted(set(source_ips))
+                network_prefix = ipv4.get("network_prefix")
+                if network_prefix:
+                    adapter_networks.append(f"{address}/{network_prefix}")
+        return sorted(set(source_ips)), sorted(set(adapter_networks))
+
+    def _resolve_alias_entity_id(self, alias: str) -> str | None:
+        """Resolve an automation or script entity by friendly name."""
+        for domain in ("automation", "script"):
+            for state in self.hass.states.async_all(domain):
+                friendly_name = state.attributes.get("friendly_name")
+                if friendly_name == alias:
+                    return state.entity_id
+        return None
+
+    def _build_meraki_wake_targets(self) -> list[WakeTarget]:
+        """Build wake targets from the latest Meraki candidates."""
+        targets: list[WakeTarget] = []
+        for item in self.data.meraki_candidates:
+            targets.append(
+                WakeTarget(
+                    ip=item["ip"],
+                    mac=item.get("mac"),
+                    broadcast_address=item.get("broadcast_address"),
+                    source="meraki_api",
+                    label=item.get("friendly_name") or item["ip"],
+                )
+            )
+        return targets
 
     def _discover_devices(
         self,

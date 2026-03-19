@@ -19,7 +19,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: LgTvManagerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([LgTvRefreshButton(coordinator, entry)])
+    async_add_entities([LgTvRefreshButton(coordinator, entry), LgTvDiscoverySweepButton(coordinator, entry)])
 
 
 class LgTvRefreshButton(CoordinatorEntity, ButtonEntity):
@@ -35,3 +35,18 @@ class LgTvRefreshButton(CoordinatorEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_request_refresh()
+
+
+class LgTvDiscoverySweepButton(CoordinatorEntity, ButtonEntity):
+    """Run a wake-and-refresh discovery sweep."""
+
+    _attr_name = "LG TV Manager Discovery Sweep"
+    _attr_icon = "mdi:television-play"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: LgTvManagerCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_discovery_sweep"
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_run_discovery_sweep()

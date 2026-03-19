@@ -26,7 +26,7 @@ def _options_schema(user_input: dict[str, Any] | None = None) -> vol.Schema:
     user_input = user_input or {}
     return vol.Schema(
         {
-            vol.Required(
+            vol.Optional(
                 CONF_INVENTORY_PATH,
                 default=user_input.get(CONF_INVENTORY_PATH, DEFAULT_INVENTORY_PATH),
             ): str,
