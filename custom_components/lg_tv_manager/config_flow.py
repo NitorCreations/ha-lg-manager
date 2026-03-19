@@ -9,11 +9,13 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    CONF_ENABLE_LEGACY_WAKE_ALIASES,
     CONF_FIREWALL_CLIENTS_PATH,
     CONF_INVENTORY_PATH,
     CONF_MERAKI_API_KEY,
     CONF_MERAKI_API_URL,
     CONF_SCAN_INTERVAL,
+    DEFAULT_ENABLE_LEGACY_WAKE_ALIASES,
     DEFAULT_INVENTORY_PATH,
     DEFAULT_MERAKI_API_URL,
     DEFAULT_SCAN_INTERVAL,
@@ -41,6 +43,13 @@ def _options_schema(user_input: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_MERAKI_API_KEY,
                 default=user_input.get(CONF_MERAKI_API_KEY, ""),
             ): str,
+            vol.Required(
+                CONF_ENABLE_LEGACY_WAKE_ALIASES,
+                default=user_input.get(
+                    CONF_ENABLE_LEGACY_WAKE_ALIASES,
+                    DEFAULT_ENABLE_LEGACY_WAKE_ALIASES,
+                ),
+            ): bool,
             vol.Required(
                 CONF_SCAN_INTERVAL,
                 default=user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),

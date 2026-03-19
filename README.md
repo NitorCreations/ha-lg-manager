@@ -75,11 +75,13 @@ When pressed, it:
 
 1. builds wake targets from all current Meraki-discovered LG-like candidates
 2. sends Home Assistant WOL packets for those candidates when MAC and broadcast information are available
-3. triggers any known wake automation/script aliases from the optional inventory
+3. optionally triggers known wake automation/script aliases from the optional inventory when `Enable legacy wake automation/script aliases` is turned on
 4. waits briefly
 5. refreshes live discovery and reconciliation
 
 This is intended for cases where most TVs are normally off and Meraki acts as the candidate source while SSDP/webOS provides the live identity after wake.
+
+By default, the sweep does not depend on manually maintained wake automations.
 
 ## Live configuration inspection
 

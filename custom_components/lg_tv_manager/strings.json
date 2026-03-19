@@ -9,6 +9,7 @@
           "firewall_clients_path": "Optional firewall CSV path",
           "meraki_api_url": "Optional Meraki clients API URL",
           "meraki_api_key": "Optional Meraki API key",
+          "enable_legacy_wake_aliases": "Enable legacy wake automation/script aliases",
           "scan_interval": "Scan interval in seconds"
         }
       }
@@ -26,6 +27,7 @@
           "firewall_clients_path": "Optional firewall CSV path",
           "meraki_api_url": "Optional Meraki clients API URL",
           "meraki_api_key": "Optional Meraki API key",
+          "enable_legacy_wake_aliases": "Enable legacy wake automation/script aliases",
           "scan_interval": "Scan interval in seconds"
         }
       }

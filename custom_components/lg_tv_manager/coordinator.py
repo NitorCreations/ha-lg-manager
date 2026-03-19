@@ -16,6 +16,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_ENABLE_LEGACY_WAKE_ALIASES,
     CONF_FIREWALL_CLIENTS_PATH,
     CONF_INVENTORY_PATH,
     CONF_MERAKI_API_KEY,
@@ -103,15 +104,19 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
             )
             automations_path = Path(self.hass.config.path("automations.yaml"))
             scripts_path = Path(self.hass.config.path("scripts.yaml"))
+            enable_legacy_wake_aliases = bool(
+                self.config_entry.options.get(CONF_ENABLE_LEGACY_WAKE_ALIASES, False)
+            )
             meraki_api_url = (self.config_entry.options.get(CONF_MERAKI_API_URL) or "").strip()
             meraki_api_key = (self.config_entry.options.get(CONF_MERAKI_API_KEY) or "").strip()
             _, inventory_by_title = await self.hass.async_add_executor_job(load_inventory, inventory_path)
             source_ips, adapter_networks = await self._async_get_network_context()
             LOGGER.debug(
-                "Loading LG TV inventory from %s, firewall CSV %s, Meraki %s, source IPs %s adapter_networks %s",
+                "Loading LG TV inventory from %s, firewall CSV %s, Meraki %s, legacy_aliases %s, source IPs %s adapter_networks %s",
                 inventory_path,
                 firewall_clients_path if firewall_clients_path else "<disabled>",
                 meraki_api_url if meraki_api_url and meraki_api_key else "<disabled>",
+                enable_legacy_wake_aliases,
                 source_ips,
                 adapter_networks,
             )
@@ -209,37 +214,38 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
             )
             triggered.append(f"wake_on_lan:{candidate.label}")
 
-        expected_aliases = sorted(
-            {
-                alias
-                for aliases in self.data.expected_wol_aliases.values()
-                for alias in aliases
-            }
-        )
-        for alias in expected_aliases:
-            entity_id = self._resolve_alias_entity_id(alias)
-            if not entity_id:
-                unresolved.append(alias)
-                continue
-            domain = entity_id.split(".", 1)[0]
-            if domain == "automation":
-                await self.hass.services.async_call(
-                    "automation",
-                    "trigger",
-                    {"entity_id": entity_id, "skip_condition": True},
-                    blocking=True,
-                )
-                triggered.append(entity_id)
-            elif domain == "script":
-                await self.hass.services.async_call(
-                    "script",
-                    "turn_on",
-                    {"entity_id": entity_id},
-                    blocking=True,
-                )
-                triggered.append(entity_id)
-            else:
-                unresolved.append(alias)
+        if self.config_entry.options.get(CONF_ENABLE_LEGACY_WAKE_ALIASES, False):
+            expected_aliases = sorted(
+                {
+                    alias
+                    for aliases in self.data.expected_wol_aliases.values()
+                    for alias in aliases
+                }
+            )
+            for alias in expected_aliases:
+                entity_id = self._resolve_alias_entity_id(alias)
+                if not entity_id:
+                    unresolved.append(alias)
+                    continue
+                domain = entity_id.split(".", 1)[0]
+                if domain == "automation":
+                    await self.hass.services.async_call(
+                        "automation",
+                        "trigger",
+                        {"entity_id": entity_id, "skip_condition": True},
+                        blocking=True,
+                    )
+                    triggered.append(entity_id)
+                elif domain == "script":
+                    await self.hass.services.async_call(
+                        "script",
+                        "turn_on",
+                        {"entity_id": entity_id},
+                        blocking=True,
+                    )
+                    triggered.append(entity_id)
+                else:
+                    unresolved.append(alias)
 
         LOGGER.debug(
             "LG TV Manager discovery sweep triggered=%s unresolved=%s waiting=%ss",
