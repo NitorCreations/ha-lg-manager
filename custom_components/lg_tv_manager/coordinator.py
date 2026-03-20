@@ -39,6 +39,7 @@ from .model import (
     network_broadcast_for_ip,
     normalize_uuid,
     reconcile_tvs,
+    vlan_broadcast_for_candidate,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -145,8 +146,10 @@ class LgTvManagerCoordinator(DataUpdateCoordinator[LgManagerData]):
                     "mac": item.mac,
                     "friendly_name": item.friendly_name,
                     "manufacturer": item.manufacturer,
+                    "vlan": item.vlan,
                     "note": item.note,
-                    "broadcast_address": network_broadcast_for_ip(item.ip, adapter_networks),
+                    "broadcast_address": vlan_broadcast_for_candidate(item.vlan)
+                    or network_broadcast_for_ip(item.ip, adapter_networks),
                 }
                 for item in discovered_tvs
                 if item.source == "meraki_api"

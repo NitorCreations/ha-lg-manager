@@ -59,6 +59,7 @@ class DiscoveredTv:
     source: str
     note: str | None = None
     ssdp_st: str | None = None
+    vlan: int | None = None
 
 
 @dataclass
@@ -134,6 +135,13 @@ def network_broadcast_for_ip(ip_address: str, adapter_networks: list[str]) -> st
     return None
 
 
+def vlan_broadcast_for_candidate(vlan: int | None) -> str | None:
+    """Derive the office /22 broadcast address from a known TV VLAN."""
+    if vlan in (110, 151):
+        return f"10.{vlan}.3.255"
+    return None
+
+
 def load_inventory(path: Path) -> tuple[dict[str, InventoryTv], dict[str, InventoryTv]]:
     if not path.exists():
         return {}, {}
@@ -187,6 +195,7 @@ def load_firewall_clients(path: Path | None) -> list[DiscoveredTv]:
                     model_name=None,
                     source="firewall_csv",
                     note=row.get("Status") or None,
+                    vlan=int(row["VLAN"]) if str(row.get("VLAN", "")).isdigit() else None,
                 )
             )
     return devices
@@ -246,6 +255,7 @@ def load_meraki_clients(api_url: str | None, api_key: str | None) -> list[Discov
                 model_name=None,
                 source="meraki_api",
                 note=str(row.get("vlan") or row.get("status") or "").strip() or None,
+                vlan=int(row["vlan"]) if str(row.get("vlan", "")).isdigit() else None,
             )
         )
     return devices
