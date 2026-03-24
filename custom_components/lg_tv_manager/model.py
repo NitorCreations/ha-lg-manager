@@ -24,6 +24,13 @@ SSDP_SEARCH_TARGETS = (
     "urn:lge-com:service:webos-second-screen:1",
     "urn:schemas-upnp-org:device:MediaRenderer:1",
 )
+MERAKI_LG_MANUFACTURERS = {
+    "lg electronics",
+    "lg electronics.",
+    "lg innotek",
+    "arcadyan",
+    "visionscape",
+}
 
 
 @dataclass
@@ -97,6 +104,39 @@ class WakeTarget:
 
 def normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def is_meraki_lg_candidate(row: dict[str, Any]) -> bool:
+    """Return whether a Meraki client row looks like an LG TV candidate."""
+    manufacturer = str(row.get("manufacturer") or "").strip().lower()
+    description = str(row.get("description") or "").strip().lower()
+    name = str(row.get("name") or "").strip().lower()
+    dhcp_hostname = str(row.get("dhcpHostname") or "").strip().lower()
+    recent_device_name = str(row.get("recentDeviceName") or "").strip().lower()
+    device_name = str(row.get("deviceName") or "").strip().lower()
+    notes = str(row.get("notes") or "").strip().lower()
+
+    if manufacturer in MERAKI_LG_MANUFACTURERS:
+        return True
+
+    candidate_fields = (
+        description,
+        name,
+        dhcp_hostname,
+        recent_device_name,
+        device_name,
+        notes,
+    )
+    if any(field.startswith("lgwebostv") for field in candidate_fields if field):
+        return True
+    if any("webos" in field for field in candidate_fields if field):
+        return True
+    if any(field.endswith("-lg") or field.endswith("_lg") for field in candidate_fields if field):
+        return True
+    if any(field.startswith("lg ") or field.startswith("[lg]") for field in candidate_fields if field):
+        return True
+
+    return False
 
 
 def normalize_uuid(value: str | None) -> str | None:
@@ -230,6 +270,8 @@ def load_meraki_clients(api_url: str | None, api_key: str | None) -> list[Discov
 
     devices: list[DiscoveredTv] = []
     for row in iter_meraki_items(payload):
+        if not is_meraki_lg_candidate(row):
+            continue
         manufacturer = str(row.get("manufacturer") or "").strip()
         description = str(
             row.get("description")
@@ -239,9 +281,6 @@ def load_meraki_clients(api_url: str | None, api_key: str | None) -> list[Discov
             or ""
         ).strip()
         notes = str(row.get("notes") or row.get("deviceName") or "").strip()
-        searchable = " ".join([manufacturer, description, notes]).lower()
-        if "lg" not in searchable and "webos" not in searchable:
-            continue
         ip_address = str(row.get("ip") or row.get("ip6") or "").strip()
         if not ip_address or ":" in ip_address:
             continue

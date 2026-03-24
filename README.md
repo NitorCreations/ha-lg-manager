@@ -67,6 +67,8 @@ If you use Cisco Meraki for client visibility, you can provide:
 
 The API key is intended to be stored in Home Assistant's config entry storage, not in this repository.
 
+For mostly-off TVs, use a longer `timespan` than one day. A 24 hour window can miss devices that still appear in the Meraki dashboard client view but have not been seen recently.
+
 ## Discovery sweep
 
 The integration provides an `LG TV Manager Discovery Sweep` button entity.
