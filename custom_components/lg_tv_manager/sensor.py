@@ -38,6 +38,24 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def _wol_records_for_result(coordinator: LgTvManagerCoordinator, title: str) -> list[dict[str, object]]:
+    expected_aliases = coordinator.data.expected_wol_aliases.get(title, [])
+    wol_records = []
+    for alias in expected_aliases:
+        record = coordinator.data.wol_action_records.get(alias)
+        if record:
+            wol_records.append(
+                {
+                    "alias": record.alias,
+                    "source_type": record.source_type,
+                    "mac": record.mac,
+                    "broadcast_address": record.broadcast_address,
+                    "broadcast_port": record.broadcast_port,
+                }
+            )
+    return wol_records
+
+
 class LgTvManagerSummarySensor(CoordinatorEntity[LgManagerData], SensorEntity):
     """Summary sensor for the manager."""
 
@@ -59,6 +77,29 @@ class LgTvManagerSummarySensor(CoordinatorEntity[LgManagerData], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, int]:
         data = self.coordinator.data
+        ip_changed_items = []
+        mac_changed_items = []
+        replacement_items = []
+        for result in data.results:
+            payload = {
+                "title": result.title,
+                "room": result.room,
+                "entity_id": result.entity_id,
+                "confidence": result.confidence,
+                "configured_host": result.configured_host,
+                "discovered_ip": result.discovered_ip,
+                "configured_uuid": result.configured_uuid,
+                "discovered_uuid": result.discovered_uuid,
+                "discovered_mac": result.discovered_mac,
+                "current_wol_configurations": _wol_records_for_result(self.coordinator, result.title),
+                "notes": result.notes,
+            }
+            if result.classification == "ip_changed":
+                ip_changed_items.append(payload)
+            elif result.classification == "mac_changed":
+                mac_changed_items.append(payload)
+            elif result.classification == "replacement_candidate":
+                replacement_items.append(payload)
         return {
             "configured_count": data.configured_count,
             "discovered_count": data.discovered_count,
@@ -74,6 +115,9 @@ class LgTvManagerSummarySensor(CoordinatorEntity[LgManagerData], SensorEntity):
                 1 for item in data.results if item.classification == "replacement_candidate"
             ),
             "missing": sum(1 for item in data.results if item.classification == "missing"),
+            "ip_changed_items": ip_changed_items,
+            "mac_changed_items": mac_changed_items,
+            "replacement_candidate_items": replacement_items,
         }
 
 
@@ -102,19 +146,7 @@ class LgTvReconcileSensor(CoordinatorEntity[LgManagerData], SensorEntity):
     def extra_state_attributes(self) -> dict[str, object]:
         result = self._result
         expected_aliases = self.coordinator.data.expected_wol_aliases.get(result.title, [])
-        wol_records = []
-        for alias in expected_aliases:
-            record = self.coordinator.data.wol_action_records.get(alias)
-            if record:
-                wol_records.append(
-                    {
-                        "alias": record.alias,
-                        "source_type": record.source_type,
-                        "mac": record.mac,
-                        "broadcast_address": record.broadcast_address,
-                        "broadcast_port": record.broadcast_port,
-                    }
-                )
+        wol_records = _wol_records_for_result(self.coordinator, result.title)
         return {
             "room": result.room,
             "entity_id": result.entity_id,
