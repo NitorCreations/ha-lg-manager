@@ -1,5 +1,7 @@
 # HA LG Manager
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=NitorCreations&repository=ha-lg-manager&category=integration)
+
 Home Assistant custom integration for managing LG webOS TVs during network migrations and ongoing office operations.
 
 ## What it does
